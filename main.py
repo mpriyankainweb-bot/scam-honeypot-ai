@@ -1,13 +1,17 @@
 from fastapi import FastAPI, Header, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from sessions import get_session
+from typing import List, Optional
+import time
+
+# ==== IMPORT YOUR EXISTING MODULES ====
 from detector import detect_scam
 from agent import generate_agent_reply
 from extractor import extract_intelligence
 
 app = FastAPI()
-from fastapi.middleware.cors import CORSMiddleware
 
+# ==== ENABLE CORS ====
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -16,14 +20,41 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# =========================
+# REQUEST MODELS (Official Format)
+# =========================
 
-API_KEY = "mysecret123"
+class Message(BaseModel):
+    sender: str
+    text: str
+    timestamp: Optional[str] = None
+
+
+class Metadata(BaseModel):
+    channel: Optional[str] = None
+    language: Optional[str] = None
+    locale: Optional[str] = None
 
 
 class HoneyPotRequest(BaseModel):
-    session_id: str
-    message: str
+    sessionId: str
+    message: Message
+    conversationHistory: Optional[List[Message]] = []
+    metadata: Optional[Metadata] = None
 
+
+# =========================
+# HEALTH CHECK
+# =========================
+
+@app.get("/")
+def health():
+    return {"status": "HoneyPot API Running"}
+
+
+# =========================
+# MAIN ENDPOINT
+# =========================
 
 @app.post("/honeypot")
 def honeypot(
@@ -31,35 +62,32 @@ def honeypot(
     x_api_key: str = Header(None, alias="x-api-key")
 ):
 
-    if x_api_key != API_KEY:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+    # ✅ API KEY VALIDATION
+    if x_api_key != "mysecret123":
+        raise HTTPException(status_code=403, detail="Invalid API Key")
 
-    session = get_session(request.session_id)
+    start_time = time.time()
 
-    detection = detect_scam(request.message)
+    scam_text = request.message.text
 
+    # === YOUR EXISTING LOGIC ===
+    detection = detect_scam(scam_text)
     agent_reply = generate_agent_reply(
-        session["history"],
-        request.message
+    request.conversationHistory,
+    scam_text
     )
+    intelligence = extract_intelligence(scam_text)
 
-    intelligence = extract_intelligence(request.message)
+    duration = int(time.time() - start_time)
 
-    session["history"].append({
-        "scammer": request.message,
-        "agent": agent_reply
-    })
-
-   return {
-    "scam_detected": detection["scam_detected"],
-    "risk_score": detection["risk_score"],
-    "threat_level": detection["threat_level"], 
-    "agent_reply": agent_reply,
-    "intelligence": intelligence
-}
-
-
-
-@app.get("/health")
-def health_check():
-    return {"status": "healthy"}
+    # ==== REQUIRED RESPONSE FORMAT ====
+    return {
+        "status": "success",
+        "scamDetected": detection["scam_detected"],
+        "engagementMetrics": {
+            "engagementDurationSeconds": duration,
+            "totalMessagesExchanged": len(request.conversationHistory) + 1
+        },
+        "extractedIntelligence": intelligence,
+        "agentNotes": agent_reply
+    }
